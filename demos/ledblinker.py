@@ -8,12 +8,14 @@ class LEDBlinker(Module):
         ###
 
         counter = Signal(26)
+
         @pigen.statement(self)
         def led_handler():
-            led is counter[25]
+            nonlocal counter
+            self.led is counter[25]
             counter = counter + 1
 
 if __name__ == "__main__":
     from migen.fhdl.verilog import convert
     m = LEDBlinker()
-    convert(m, ios=set({m.led})).write("demos/ledblinker.v")
+    convert(m, ios={m.led}).write("demos/ledblinker.v")

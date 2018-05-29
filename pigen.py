@@ -83,8 +83,43 @@ def _translate(input_fn, module, domain, comb_allowed, sync_allowed, fsm=None):
         return statements
 
     statements = parse_body(fn_body)
-        
-    print(statements)
+
+    # STEP 3: execute statements
+
+    # first a little work: derive the context in which the original function ran
+    orig_globals = input_fn.__globals__ # that one was easy
+    orig_locals = {}
+    for name, val in zip(input_fn.__code__.co_freevars, input_fn.__closure__):
+        orig_locals[name] = val.cell_contents
+
+    # we also need a thing which turns store context into load
+    def makeload(v):
+        for node in ast.walk(v):
+            if hasattr(node, 'ctx'):
+                node.ctx = ast.Load()
+
+    for stmt in statements:
+        # now execute the statements
+        if stmt[0] == "comb" or stmt[0] == "sync":
+            # build an AST to execute x.eq(y)
+            x, y = stmt[1:]
+            # fix x so that it's loading the value
+            makeload(x)
+            # the eq function
+            eq = ast.Attribute(value=x, attr='eq', ctx=ast.Load())
+            # the call
+            call = ast.Expression(ast.Call(func=eq, args=[y], keywords=[]))
+            ast.fix_missing_locations(call)
+            # now we can compile it into a code object
+            code = compile(call, filename="<pigen>", mode="eval")
+            # finally, we can eval it to get the result
+            res = eval(code, orig_globals, orig_locals)
+            # of course, now we have to add that to the module
+            cs = getattr(module, stmt[0])
+            if domain != "sys":
+                cs = getattr(module, domain)
+            cs += res
+
 
 def _get_ast(fn):
     # get the AST for a given function
