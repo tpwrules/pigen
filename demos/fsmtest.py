@@ -18,7 +18,7 @@ class FSMTest(Module):
             if self.strobe:
                 next_state = "DATA"
 
-        @pigeon.fsm(fsm, "DATA")
+        @pigen.fsm(fsm, "DATA")
         def fsm_data():
             self.active is 1
             if self.strobe:
@@ -26,12 +26,12 @@ class FSMTest(Module):
                 if self.bitno == 7:
                     next_state = "END"
 
-        @pigeon.fsm(fsm, "END")
+        @pigen.fsm(fsm, "END")
         def fsm_end():
             self.active is 0
             next_state = "STOP"
 
-        @pigeon.fsm(fsm, "STOP")
+        @pigen.fsm(fsm, "STOP")
         def fsm_stop():
             self.active is 0
             if self.strobe:
