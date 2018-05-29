@@ -1,4 +1,5 @@
 from migen import *
+import pigen
 
 class LEDBlinker(Module):
     def __init__(self):
@@ -7,8 +8,10 @@ class LEDBlinker(Module):
         ###
 
         counter = Signal(26)
-        self.comb += self.led.eq(counter[25])
-        self.sync += counter.eq(counter + 1)
+        @pigen.statement()
+        def led_handler():
+            led is counter[25]
+            counter = counter + 1
 
 if __name__ == "__main__":
     from migen.fhdl.verilog import convert
