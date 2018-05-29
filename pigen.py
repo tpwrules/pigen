@@ -68,6 +68,8 @@ def _translate(input_fn, module, domain, comb_allowed, sync_allowed, fsm=None):
                 statements.append(("comb", stmt.left, stmt.comparators[0]))
                 if kind == "sync" and fsm is None:
                     raise TranslationError("mixing comb and sync inside if")
+                if kind is not None:
+                    kind = "comb"
             elif isinstance(stmt, ast.Assign):
                 # an assignment statement, this must be synchronous
                 # extract the dest and src
@@ -80,9 +82,24 @@ def _translate(input_fn, module, domain, comb_allowed, sync_allowed, fsm=None):
                 statements.append(("sync", dest, src))
                 if kind == "comb" and fsm is None:
                     raise TranslationError("mixing comb and sync inside if")
-        return statements
+                if kind is not None:
+                    kind = "sync"
+            elif isinstance(stmt, ast.If):
+                # what we are predicating on
+                test = stmt.test
+                if_true, true_kind = parse_body(stmt.body, "if")
+                if_false, false_kind = parse_body(stmt.orelse, "else")
+                if true_kind == "if": continue
+                if false_kind != "else" and true_kind != false_kind:
+                    raise TranslationError("mixing comb and sync across if/else")
+                statements.append(("if", true_kind, test, if_true, if_false))
+            elif isinstance(stmt, ast.Nonlocal):
+                continue
+            else:
+                raise TranslationError("invalid statement {}".format(stmt))
+        return statements, kind
 
-    statements = parse_body(fn_body)
+    statements, _ = parse_body(fn_body)
 
     # STEP 3: execute statements
 
@@ -98,27 +115,47 @@ def _translate(input_fn, module, domain, comb_allowed, sync_allowed, fsm=None):
             if hasattr(node, 'ctx'):
                 node.ctx = ast.Load()
 
-    for stmt in statements:
-        # now execute the statements
-        if stmt[0] == "comb" or stmt[0] == "sync":
-            # build an AST to execute x.eq(y)
-            x, y = stmt[1:]
-            # fix x so that it's loading the value
-            makeload(x)
-            # the eq function
-            eq = ast.Attribute(value=x, attr='eq', ctx=ast.Load())
-            # the call
-            call = ast.Expression(ast.Call(func=eq, args=[y], keywords=[]))
-            ast.fix_missing_locations(call)
-            # now we can compile it into a code object
-            code = compile(call, filename="<pigen>", mode="eval")
-            # finally, we can eval it to get the result
-            res = eval(code, orig_globals, orig_locals)
-            # of course, now we have to add that to the module
-            cs = getattr(module, stmt[0])
-            if domain != "sys":
-                cs = getattr(module, domain)
-            cs += res
+    def exec_stmts(stmts):
+        results = []
+        for stmt in stmts:
+            # now execute the statements
+            if stmt[0] == "comb" or stmt[0] == "sync":
+                # build an AST to execute x.eq(y)
+                x, y = stmt[1:]
+                # fix x so that it's loading the value
+                makeload(x)
+                # the eq function
+                eq = ast.Attribute(value=x, attr='eq', ctx=ast.Load())
+                # the call
+                call = ast.Expression(ast.Call(func=eq, args=[y], keywords=[]))
+                ast.fix_missing_locations(call)
+                # now we can compile it into a code object
+                code = compile(call, filename="<pigen>", mode="eval")
+                # finally, we can eval it to get the result
+                results.append((stmt[0], eval(code, orig_globals, orig_locals)))
+            elif stmt[0] == "if":
+                # execute the predicate
+                pred = ast.Expression(stmt[2])
+                ast.fix_missing_locations(pred)
+                code = compile(pred, filename="<pigen>", mode="eval")
+                pres = eval(code, orig_globals, orig_locals)
+                # get results of substatements
+                if_true = tuple(r[1] for r in exec_stmts(stmt[3]))
+                if_false = tuple(r[1] for r in exec_stmts(stmt[4]))
+                the_if = migen.If(pres, *if_true)
+                if len(if_false) > 0:
+                    the_if = the_if.Else(*if_false)
+                results.append((stmt[1], the_if))
+        return results
+
+    # add top level results to module
+    results = exec_stmts(statements)
+    for result in results:
+        # of course, now we have to add that to the module
+        cs = getattr(module, result[0])
+        if domain != "sys":
+            cs = getattr(module, domain)
+        cs += result[1]
 
 
 def _get_ast(fn):
