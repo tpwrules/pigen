@@ -3,6 +3,7 @@ Translate Python functions into Migen statements.
 Functions are translated in the following manner:
 * identity statements `x is y` become `module.comb.<domain> += x.eq(y)` (but not identity expressions!)
 * assignment statements `x = y` become `module.sync.<domain> += x.eq(y)`
+* assignment statements `next_state = x` become `NextState(x)`
 * if statements become the corresponding objects
 * no other statements in the function body are supported
 * all Migen expressions are supported
