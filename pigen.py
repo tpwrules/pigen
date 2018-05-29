@@ -79,6 +79,12 @@ def _translate(input_fn, module, domain, comb_allowed, sync_allowed, fsm=None):
                             len(stmt.targets)))
                 dest = stmt.targets[0]
                 src = stmt.value
+                # test if the dest is the fabled next_state
+                if isinstance(dest, ast.Name) and dest.id == "next_state":
+                    if fsm is None:
+                        raise TranslationError("next_state assignment outside fsm")
+                    statements.append(("next_state", src))
+                    continue
                 statements.append(("sync", dest, src))
                 if kind == "comb" and fsm is None:
                     raise TranslationError("mixing comb and sync inside if")
@@ -89,7 +95,7 @@ def _translate(input_fn, module, domain, comb_allowed, sync_allowed, fsm=None):
                 test = stmt.test
                 if_true, true_kind = parse_body(stmt.body, "if")
                 if_false, false_kind = parse_body(stmt.orelse, "else")
-                if true_kind == "if": continue
+                if true_kind == "if" and fsm is None: continue
                 if false_kind != "else" and true_kind != false_kind and fsm is None:
                     raise TranslationError("mixing comb and sync across if/else")
                 statements.append(("if", true_kind, test, if_true, if_false))
@@ -136,7 +142,12 @@ def _translate(input_fn, module, domain, comb_allowed, sync_allowed, fsm=None):
                 makeload(stmt[1]) # after a little hack
                 x, y = ast_eval(stmt[1]), ast_eval(stmt[2])
                 # now execute x.eq(y) and save the result
-                results.append((stmt[0], x.eq(y)))
+                if fsm is None or stmt[0] == "comb":
+                    results.append((stmt[0], x.eq(y)))
+                else:
+                    # sync with FSM requires a special object
+                    results.append((stmt[0],
+                        migen.genlib.fsm.NextValue(x, y)))
             elif stmt[0] == "if":
                 # execute the predicate
                 pred = ast_eval(stmt[2])
@@ -147,6 +158,11 @@ def _translate(input_fn, module, domain, comb_allowed, sync_allowed, fsm=None):
                 if len(if_false) > 0:
                     the_if = the_if.Else(*if_false)
                 results.append((stmt[1], the_if))
+            elif stmt[0] == "next_state":
+                # the result is just a next state marker
+                results.append((None,
+                    migen.genlib.fsm.NextState(
+                        ast_eval(stmt[1]))))
         return results
 
     # add top level results to module
@@ -158,6 +174,9 @@ def _translate(input_fn, module, domain, comb_allowed, sync_allowed, fsm=None):
             if domain != "sys":
                 cs = getattr(module, domain)
             cs += result[1]
+    else:
+        results = tuple(r[1] for r in exec_stmts(statements))
+        fsm[0].act(fsm[1], *results)
 
 
 def _get_ast(fn):
